@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Portfolio Architecture</title>
     <style>
         * {
@@ -18,7 +18,7 @@
             justify-content: center;
             align-items: center;
             min-height: 100vh;
-            overflow-x: hidden;
+            overflow: hidden;
             padding: 20px;
         }
 
@@ -40,6 +40,18 @@
             justify-content: center;
             margin-bottom: 30px;
             position: relative;
+            overflow: hidden;
+            cursor: grab;
+        }
+
+        .book-container.grabbing {
+            cursor: grabbing;
+        }
+
+        .book-wrapper {
+            position: relative;
+            transform-origin: center center;
+            transition: transform 0.1s ease-out;
         }
 
         .book {
@@ -66,8 +78,8 @@
             align-items: center;
             justify-content: center;
             box-shadow: 0 10px 30px rgba(0,0,0,0.6);
-            cursor: pointer;
             position: relative;
+            flex-shrink: 0;
         }
 
         .page img {
@@ -75,32 +87,8 @@
             max-height: 100%;
             object-fit: contain;
             display: block;
-        }
-
-        .page.zoomed {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%) scale(2);
-            z-index: 1000;
-            cursor: move;
-            width: 500px;
-            height: 707px;
-        }
-
-        .zoom-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            background: rgba(0, 40, 85, 0.95);
-            z-index: 999;
-            display: none;
-        }
-
-        .zoom-overlay.active {
-            display: block;
+            pointer-events: none;
+            user-select: none;
         }
 
         .controls {
@@ -171,11 +159,6 @@
                 width: 400px;
                 height: 566px;
             }
-
-            .page.zoomed {
-                width: 400px;
-                height: 566px;
-            }
         }
 
         @media (max-width: 900px) {
@@ -189,11 +172,6 @@
             }
 
             .page {
-                width: 350px;
-                height: 495px;
-            }
-
-            .page.zoomed {
                 width: 350px;
                 height: 495px;
             }
@@ -213,11 +191,6 @@
                 width: 300px;
                 height: 424px;
             }
-
-            .page.zoomed {
-                width: 300px;
-                height: 424px;
-            }
             
             button {
                 font-size: 35px;
@@ -228,25 +201,17 @@
 
         @media (max-width: 650px) {
             .book {
-                max-width: 250px;
-                height: 354px;
+                max-width: 200px;
+                height: 283px;
             }
 
             .book.double-page {
-                max-width: 250px;
-                flex-direction: column;
-                height: auto;
-                gap: 20px;
+                max-width: 410px;
             }
 
             .page {
-                width: 250px;
-                height: 354px;
-            }
-
-            .page.zoomed {
-                width: 250px;
-                height: 354px;
+                width: 200px;
+                height: 283px;
             }
             
             .controls {
@@ -259,19 +224,35 @@
                 height: 45px;
             }
         }
+
+        @media (max-width: 450px) {
+            .book {
+                max-width: 150px;
+                height: 212px;
+            }
+
+            .book.double-page {
+                max-width: 310px;
+            }
+
+            .page {
+                width: 150px;
+                height: 212px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="zoom-overlay" id="zoom-overlay"></div>
-
     <div class="container">
         <div class="loading" id="loading">
             Chargement du portfolio...
         </div>
 
         <div class="book-container" id="book-container">
-            <div class="book" id="book">
-                <!-- Les pages seront générées ici -->
+            <div class="book-wrapper" id="book-wrapper">
+                <div class="book" id="book">
+                    <!-- Les pages seront générées ici -->
+                </div>
             </div>
         </div>
 
@@ -285,7 +266,7 @@
         </div>
         
         <div class="zoom-info" id="zoom-info">
-            Double-cliquez sur une page pour zoomer • Cliquez pour changer de page
+            Molette/Pinch pour zoomer • Double-clic gauche/droite pour naviguer
         </div>
     </div>
 
@@ -296,12 +277,22 @@
         let currentSpread = 0;
         let pages = [];
         let pdfDoc = null;
-        let zoomedElement = null;
 
+        // Variables pour le zoom et le déplacement
+        let scale = 1;
+        let minScale = 1;
+        let maxScale = 5;
+        let isPanning = false;
+        let startX = 0;
+        let startY = 0;
+        let translateX = 0;
+        let translateY = 0;
+
+        const bookContainer = document.getElementById('book-container');
+        const bookWrapper = document.getElementById('book-wrapper');
         const bookElement = document.getElementById('book');
-        const overlay = document.getElementById('zoom-overlay');
 
-        // Charger automatiquement le PDF au chargement de la page
+        // Charger automatiquement le PDF
         window.addEventListener('load', function() {
             loadPDFFromURL('portfolio.pdf');
         });
@@ -336,7 +327,6 @@
                 updatePageCounter();
                 updateButtons();
                 
-                // Afficher le portfolio et masquer le chargement
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('book-container').style.display = 'flex';
                 document.getElementById('controls').style.display = 'flex';
@@ -350,6 +340,7 @@
 
         function renderSpread() {
             bookElement.innerHTML = '';
+            resetZoom();
 
             if (pages.length === 0) return;
 
@@ -359,7 +350,7 @@
                 const page = createPage(pages[0], 0);
                 bookElement.appendChild(page);
             } 
-            // Pages suivantes en vis-à-vis (double page)
+            // Pages suivantes en vis-à-vis
             else {
                 bookElement.className = 'book double-page';
                 
@@ -386,52 +377,133 @@
             img.src = imageSrc;
             pageDiv.appendChild(img);
 
-            // Double-clic pour zoom
-            pageDiv.addEventListener('dblclick', (e) => {
-                e.stopPropagation();
-                toggleZoom(pageDiv);
-            });
+            return pageDiv;
+        }
 
-            // Clic simple pour navigation
-            pageDiv.addEventListener('click', (e) => {
-                if (zoomedElement) return;
-                e.stopPropagation();
+        // Zoom avec la molette de la souris
+        bookContainer.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            
+            const rect = bookContainer.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            
+            const delta = e.deltaY > 0 ? 0.9 : 1.1;
+            const newScale = Math.min(Math.max(minScale, scale * delta), maxScale);
+            
+            if (newScale !== scale) {
+                const scaleRatio = newScale / scale;
+                translateX = mouseX - (mouseX - translateX) * scaleRatio;
+                translateY = mouseY - (mouseY - translateY) * scaleRatio;
+                scale = newScale;
+                updateTransform();
+            }
+        }, { passive: false });
+
+        // Zoom tactile (pinch)
+        let initialDistance = 0;
+        let initialScale = 1;
+
+        bookContainer.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                initialDistance = getDistance(e.touches[0], e.touches[1]);
+                initialScale = scale;
+            } else if (e.touches.length === 1 && scale > 1) {
+                isPanning = true;
+                startX = e.touches[0].clientX - translateX;
+                startY = e.touches[0].clientY - translateY;
+                bookContainer.classList.add('grabbing');
+            }
+        }, { passive: false });
+
+        bookContainer.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                const currentDistance = getDistance(e.touches[0], e.touches[1]);
+                const newScale = Math.min(Math.max(minScale, initialScale * (currentDistance / initialDistance)), maxScale);
+                scale = newScale;
+                updateTransform();
+            } else if (e.touches.length === 1 && isPanning) {
+                e.preventDefault();
+                translateX = e.touches[0].clientX - startX;
+                translateY = e.touches[0].clientY - startY;
+                updateTransform();
+            }
+        }, { passive: false });
+
+        bookContainer.addEventListener('touchend', (e) => {
+            if (e.touches.length < 2) {
+                isPanning = false;
+                bookContainer.classList.remove('grabbing');
+            }
+        });
+
+        function getDistance(touch1, touch2) {
+            const dx = touch1.clientX - touch2.clientX;
+            const dy = touch1.clientY - touch2.clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        // Déplacement avec la souris en mode zoom
+        bookContainer.addEventListener('mousedown', (e) => {
+            if (scale > 1) {
+                e.preventDefault();
+                isPanning = true;
+                startX = e.clientX - translateX;
+                startY = e.clientY - translateY;
+                bookContainer.classList.add('grabbing');
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isPanning) {
+                translateX = e.clientX - startX;
+                translateY = e.clientY - startY;
+                updateTransform();
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isPanning = false;
+            bookContainer.classList.remove('grabbing');
+        });
+
+        function updateTransform() {
+            bookWrapper.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+        }
+
+        function resetZoom() {
+            scale = 1;
+            translateX = 0;
+            translateY = 0;
+            updateTransform();
+        }
+
+        // Double-clic pour navigation gauche/droite
+        let lastClickTime = 0;
+        let lastClickX = 0;
+
+        bookContainer.addEventListener('click', (e) => {
+            const currentTime = new Date().getTime();
+            const timeDiff = currentTime - lastClickTime;
+            
+            if (timeDiff < 300 && timeDiff > 0) {
+                // C'est un double-clic
+                e.preventDefault();
+                const rect = bookContainer.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const containerWidth = rect.width;
                 
-                const rect = pageDiv.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                
-                if (x < rect.width / 2) {
+                if (clickX < containerWidth / 2) {
                     prevSpread();
                 } else {
                     nextSpread();
                 }
-            });
-
-            return pageDiv;
-        }
-
-        function toggleZoom(element) {
-            if (zoomedElement === element) {
-                element.classList.remove('zoomed');
-                overlay.classList.remove('active');
-                zoomedElement = null;
-            } else {
-                if (zoomedElement) {
-                    zoomedElement.classList.remove('zoomed');
-                }
-                element.classList.add('zoomed');
-                overlay.classList.add('active');
-                zoomedElement = element;
             }
-        }
-
-        // Fermer le zoom en cliquant sur l'overlay
-        overlay.addEventListener('click', () => {
-            if (zoomedElement) {
-                zoomedElement.classList.remove('zoomed');
-                overlay.classList.remove('active');
-                zoomedElement = null;
-            }
+            
+            lastClickTime = currentTime;
+            lastClickX = e.clientX;
         });
 
         function nextSpread() {
@@ -478,42 +550,38 @@
 
         // Support clavier
         document.addEventListener('keydown', (e) => {
-            if (zoomedElement && e.key === 'Escape') {
-                toggleZoom(zoomedElement);
-                return;
-            }
-            
             if (e.key === 'ArrowLeft') {
                 prevSpread();
             } else if (e.key === 'ArrowRight') {
                 nextSpread();
+            } else if (e.key === 'Escape') {
+                resetZoom();
             }
         });
 
-        // Support swipe mobile
+        // Support swipe mobile (horizontal uniquement si pas de zoom)
         let touchStartX = 0;
-        let touchEndX = 0;
 
-        document.addEventListener('touchstart', (e) => {
-            if (zoomedElement) return;
-            touchStartX = e.changedTouches[0].screenX;
+        bookContainer.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1 && scale === 1) {
+                touchStartX = e.touches[0].clientX;
+            }
         });
 
-        document.addEventListener('touchend', (e) => {
-            if (zoomedElement) return;
-            touchEndX = e.changedTouches[0].screenX;
-            handleSwipe();
+        bookContainer.addEventListener('touchend', (e) => {
+            if (scale === 1 && e.changedTouches.length === 1) {
+                const touchEndX = e.changedTouches[0].clientX;
+                const diff = touchStartX - touchEndX;
+                
+                if (Math.abs(diff) > 50) {
+                    if (diff > 0) {
+                        nextSpread();
+                    } else {
+                        prevSpread();
+                    }
+                }
+            }
         });
-
-        function handleSwipe() {
-            const swipeThreshold = 50;
-            if (touchEndX < touchStartX - swipeThreshold) {
-                nextSpread();
-            }
-            if (touchEndX > touchStartX + swipeThreshold) {
-                prevSpread();
-            }
-        }
     </script>
 </body>
 </html>
